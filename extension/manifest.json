@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Meet Sentiment Analyzer",
   "version": "1.0",
-  "description": "Real-time sentiment analysis for Google Meet captions.",
-  "permissions": ["tabs", "storage", "scripting", "alarms"],
+  "description": "Real-time sentiment + facial emotion analysis for Google Meet.",
+  "permissions": ["tabs", "storage", "scripting", "alarms", "tabCapture"],
   "host_permissions": ["https://meet.google.com/*"],
   "background": {
     "service_worker": "background.js"
@@ -18,5 +18,11 @@
   "action": {
     "default_popup": "popup.html",
     "default_title": "Meet Sentiment"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["offscreen.html"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }

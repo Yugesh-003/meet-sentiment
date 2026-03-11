@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from services.sentiment import analyze, classify
 from services.session import add_entry, get_history, clear_session
+from services.emotion import analyze_frame
 
 app = FastAPI(title="Meet Sentiment API")
 
@@ -18,10 +19,15 @@ app.add_middleware(
 )
 
 
-# ── REST endpoints ───────────────────────────────────────────────────────────
+# ── REST endpoints ────────────────────────────────────────────────────────────
 
 class SentimentRequest(BaseModel):
     text: str
+    session_id: str | None = None
+
+
+class FrameRequest(BaseModel):
+    image_b64: str          # base64-encoded JPEG from the extension
     session_id: str | None = None
 
 
@@ -32,7 +38,7 @@ async def root():
 
 @app.post("/analyze")
 async def analyze_sentiment(request: SentimentRequest):
-    """One-shot REST sentiment analysis."""
+    """One-shot REST text sentiment analysis."""
     scores = analyze(request.text)
     label = classify(scores)
     entry = None
@@ -41,31 +47,47 @@ async def analyze_sentiment(request: SentimentRequest):
     return {"text": request.text, "sentiment": scores, "label": label, "entry": entry}
 
 
+@app.post("/analyze-frame")
+async def analyze_emotion_frame(request: FrameRequest):
+    """
+    One-shot REST facial emotion analysis.
+    Accepts a base64-encoded JPEG frame, returns dominant emotion + scores.
+    Returns 204-style empty body if the rate-limit skips the frame.
+    """
+    result = analyze_frame(request.image_b64)
+    if result is None:
+        return {"skipped": True, "reason": "rate_limited"}
+    return {"emotion": result, "session_id": request.session_id}
+
+
 @app.get("/sessions/{session_id}")
 async def get_session(session_id: str):
-    """Get full sentiment history for a session."""
     return {"session_id": session_id, "history": get_history(session_id)}
 
 
 @app.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
-    """Clear a session's data."""
     clear_session(session_id)
     return {"message": f"Session {session_id} cleared."}
 
 
-# ── WebSocket endpoint (real-time) ────────────────────────────────────────────
+# ── WebSocket endpoint (real-time captions + frames) ─────────────────────────
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """
-    WebSocket for real-time sentiment from caption chunks.
+    Accepts two types of JSON messages over one WebSocket:
 
-    Expected message format (JSON):
-        { "text": "...", "session_id": "..." }
+    Caption chunk:
+        { "type": "caption", "text": "...", "session_id": "..." }
 
-    Response format (JSON):
-        { "text": "...", "sentiment": {...}, "label": "...", "timestamp": "..." }
+    Video frame:
+        { "type": "frame", "image_b64": "...", "session_id": "..." }
+
+    Responses:
+        { "type": "result_caption", "label": "...", "scores": {...}, ... }
+        { "type": "result_emotion", "dominant_emotion": "...", "emotions": {...} }
+        { "type": "result_emotion", "skipped": true }   ← rate-limited
     """
     await websocket.accept()
     session_id = str(uuid.uuid4())
@@ -80,18 +102,32 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json({"type": "error", "message": "Invalid JSON"})
                 continue
 
-            text = data.get("text", "").strip()
-            if not text:
-                continue
-
-            # Use the session_id provided by the client, or the one assigned at connect
+            msg_type = data.get("type", "caption")
             sid = data.get("session_id", session_id)
 
-            scores = analyze(text)
-            label = classify(scores)
-            entry = add_entry(sid, text, scores, label)
+            # ── Caption analysis ──────────────────────────────────────────────
+            if msg_type == "caption":
+                text = data.get("text", "").strip()
+                if not text:
+                    continue
+                scores = analyze(text)
+                label = classify(scores)
+                entry = add_entry(sid, text, scores, label)
+                await websocket.send_json({"type": "result_caption", **entry})
 
-            await websocket.send_json({"type": "result", **entry})
+            # ── Frame / emotion analysis ──────────────────────────────────────
+            elif msg_type == "frame":
+                image_b64 = data.get("image_b64", "")
+                if not image_b64:
+                    continue
+                result = analyze_frame(image_b64)
+                if result is None:
+                    await websocket.send_json({"type": "result_emotion", "skipped": True})
+                else:
+                    await websocket.send_json({"type": "result_emotion", "emotion": result, "session_id": sid})
+
+            elif msg_type == "ping":
+                await websocket.send_json({"type": "pong"})
 
     except WebSocketDisconnect:
         pass

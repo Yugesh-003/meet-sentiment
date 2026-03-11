@@ -1,54 +1,80 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta charset="UTF-8"/>
   <title>Meet Sentiment</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { width: 280px; font-family: 'Segoe UI', sans-serif; background: #111827; color: #f9fafb; padding: 16px; }
-    h1 { font-size: 14px; font-weight: 700; margin-bottom: 12px; letter-spacing: .5px;
-         background: linear-gradient(90deg, #60a5fa, #a78bfa); -webkit-background-clip: text;
-         -webkit-text-fill-color: transparent; }
-    #status { font-size: 11px; color: #6b7280; margin-bottom: 14px; }
-    #label { font-size: 28px; font-weight: 800; text-align: center; margin: 8px 0; }
-    .label-POSITIVE { color: #34d399; }
-    .label-NEGATIVE { color: #f87171; }
-    .label-NEUTRAL  { color: #9ca3af; }
-    .bars { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+    body { width: 300px; font-family: 'Segoe UI', sans-serif; background: #111827; color: #f9fafb; padding: 16px; }
+    h1 { font-size: 13px; font-weight: 700; letter-spacing: .5px; margin-bottom: 12px;
+         background: linear-gradient(90deg, #60a5fa, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    
+    /* Controls */
+    .controls { display: flex; gap: 8px; margin-bottom: 14px; }
+    button { flex: 1; padding: 6px 0; border: none; border-radius: 8px; font-size: 12px; font-weight: 600;
+             cursor: pointer; transition: opacity .2s; }
+    #btn-start { background: #3b82f6; color: #fff; }
+    #btn-stop  { background: #374151; color: #9ca3af; }
+    button:hover { opacity: .85; }
+
+    /* Section headers */
+    .section-title { font-size: 10px; font-weight: 700; text-transform: uppercase;
+                     letter-spacing: 1px; color: #6b7280; margin: 10px 0 6px; }
+
+    /* Sentiment */
+    #sentiment-label { font-size: 24px; font-weight: 800; text-align: center; margin: 4px 0 8px; }
+    .label-POSITIVE { color: #34d399; } .label-NEGATIVE { color: #f87171; } .label-NEUTRAL { color: #9ca3af; }
+
+    /* Bars */
+    .bars { display: flex; flex-direction: column; gap: 5px; }
     .bar-row { display: flex; align-items: center; gap: 8px; font-size: 11px; }
-    .bar-row span { width: 50px; text-align: right; color: #9ca3af; }
-    .bar-bg { flex: 1; height: 8px; background: #1f2937; border-radius: 99px; overflow: hidden; }
-    .bar-fill { height: 100%; border-radius: 99px; transition: width 0.5s ease; }
-    .fill-pos { background: #34d399; }
-    .fill-neg { background: #f87171; }
-    .fill-neu { background: #6b7280; }
-    #caption { font-size: 10px; color: #4b5563; margin-top: 12px; font-style: italic;
-               max-height: 40px; overflow: hidden; text-overflow: ellipsis; }
+    .bar-row span.name { width: 52px; text-align: right; color: #9ca3af; }
+    .bar-bg { flex: 1; height: 7px; background: #1f2937; border-radius: 99px; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 99px; transition: width .5s ease; }
+    .fill-pos { background: #34d399; } .fill-neg { background: #f87171; } .fill-neu { background: #6b7280; }
+    .bar-row span.val { width: 30px; font-size: 10px; color: #6b7280; }
+
+    /* Emotion */
+    #emotion-label { font-size: 18px; font-weight: 700; text-align: center; color: #fbbf24; margin: 4px 0 6px; }
+    .emotion-bars { display: flex; flex-direction: column; gap: 4px; }
+    .ebar-row { display: flex; align-items: center; gap: 6px; font-size: 10px; }
+    .ebar-row span.name { width: 60px; text-align: right; color: #9ca3af; text-transform: capitalize; }
+    .ebar-bg { flex: 1; height: 5px; background: #1f2937; border-radius: 99px; overflow: hidden; }
+    .ebar-fill { height: 100%; border-radius: 99px; background: #fbbf24; transition: width .5s ease; }
+    .ebar-row span.val { width: 30px; font-size: 10px; color: #6b7280; }
+
+    /* Caption preview */
+    #caption { font-size: 10px; color: #4b5563; margin-top: 10px; font-style: italic;
+               max-height: 36px; overflow: hidden; }
+
+    .divider { border: none; border-top: 1px solid #1f2937; margin: 10px 0; }
   </style>
 </head>
 <body>
   <h1>🎙 Meet Sentiment</h1>
-  <div id="status">Waiting for captions...</div>
-  <div id="label">—</div>
+
+  <div class="controls">
+    <button id="btn-start">▶ Start Capture</button>
+    <button id="btn-stop">■ Stop</button>
+  </div>
+
+  <!-- Text Sentiment -->
+  <div class="section-title">💬 Caption Sentiment</div>
+  <div id="sentiment-label">—</div>
   <div class="bars">
-    <div class="bar-row">
-      <span>Positive</span>
-      <div class="bar-bg"><div class="bar-fill fill-pos" id="bar-pos" style="width:0%"></div></div>
-      <span id="val-pos">0%</span>
-    </div>
-    <div class="bar-row">
-      <span>Negative</span>
-      <div class="bar-bg"><div class="bar-fill fill-neg" id="bar-neg" style="width:0%"></div></div>
-      <span id="val-neg">0%</span>
-    </div>
-    <div class="bar-row">
-      <span>Neutral</span>
-      <div class="bar-bg"><div class="bar-fill fill-neu" id="bar-neu" style="width:0%"></div></div>
-      <span id="val-neu">0%</span>
-    </div>
+    <div class="bar-row"><span class="name">Positive</span><div class="bar-bg"><div class="bar-fill fill-pos" id="bar-pos" style="width:0%"></div></div><span class="val" id="val-pos">0%</span></div>
+    <div class="bar-row"><span class="name">Negative</span><div class="bar-bg"><div class="bar-fill fill-neg" id="bar-neg" style="width:0%"></div></div><span class="val" id="val-neg">0%</span></div>
+    <div class="bar-row"><span class="name">Neutral</span><div class="bar-bg"><div class="bar-fill fill-neu" id="bar-neu" style="width:0%"></div></div><span class="val" id="val-neu">0%</span></div>
   </div>
   <div id="caption"></div>
+
+  <hr class="divider"/>
+
+  <!-- Facial Emotion -->
+  <div class="section-title">😐 Facial Emotion</div>
+  <div id="emotion-label">—</div>
+  <div class="emotion-bars" id="emotion-bars"></div>
+
   <script src="popup.js"></script>
 </body>
 </html>
