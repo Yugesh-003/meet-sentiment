@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Meet Sentiment</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { width: 280px; font-family: 'Segoe UI', sans-serif; background: #111827; color: #f9fafb; padding: 16px; }
+    h1 { font-size: 14px; font-weight: 700; margin-bottom: 12px; letter-spacing: .5px;
+         background: linear-gradient(90deg, #60a5fa, #a78bfa); -webkit-background-clip: text;
+         -webkit-text-fill-color: transparent; }
+    #status { font-size: 11px; color: #6b7280; margin-bottom: 14px; }
+    #label { font-size: 28px; font-weight: 800; text-align: center; margin: 8px 0; }
+    .label-POSITIVE { color: #34d399; }
+    .label-NEGATIVE { color: #f87171; }
+    .label-NEUTRAL  { color: #9ca3af; }
+    .bars { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+    .bar-row { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+    .bar-row span { width: 50px; text-align: right; color: #9ca3af; }
+    .bar-bg { flex: 1; height: 8px; background: #1f2937; border-radius: 99px; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 99px; transition: width 0.5s ease; }
+    .fill-pos { background: #34d399; }
+    .fill-neg { background: #f87171; }
+    .fill-neu { background: #6b7280; }
+    #caption { font-size: 10px; color: #4b5563; margin-top: 12px; font-style: italic;
+               max-height: 40px; overflow: hidden; text-overflow: ellipsis; }
+  </style>
+</head>
+<body>
+  <h1>🎙 Meet Sentiment</h1>
+  <div id="status">Waiting for captions...</div>
+  <div id="label">—</div>
+  <div class="bars">
+    <div class="bar-row">
+      <span>Positive</span>
+      <div class="bar-bg"><div class="bar-fill fill-pos" id="bar-pos" style="width:0%"></div></div>
+      <span id="val-pos">0%</span>
+    </div>
+    <div class="bar-row">
+      <span>Negative</span>
+      <div class="bar-bg"><div class="bar-fill fill-neg" id="bar-neg" style="width:0%"></div></div>
+      <span id="val-neg">0%</span>
+    </div>
+    <div class="bar-row">
+      <span>Neutral</span>
+      <div class="bar-bg"><div class="bar-fill fill-neu" id="bar-neu" style="width:0%"></div></div>
+      <span id="val-neu">0%</span>
+    </div>
+  </div>
+  <div id="caption"></div>
+  <script src="popup.js"></script>
+</body>
+</html>
