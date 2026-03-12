@@ -1,11 +1,10 @@
 fastapi
-uvicorn
-vaderSentiment
-google-api-python-client
-google-auth-httplib2
-google-auth-oauthlib
+uvicorn[standard]
 python-dotenv
+python-multipart
 deepface
 tf-keras
 opencv-python-headless
 numpy
+Pillow
+aiofiles
