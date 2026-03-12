@@ -7,16 +7,26 @@ async function get(path, signal) {
 }
 
 async function download(path, filename) {
-  const res = await fetch(`${BASE}${path}`)
-  if (!res.ok) throw new Error(`Download failed: ${res.status}`)
-  const blob = await res.blob()
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(a.href)
+  try {
+    const res = await fetch(`${BASE}${path}`)
+    if (!res.ok) {
+      const text = await res.text()
+      console.error(`Download failed: ${res.status}`, text)
+      throw new Error(`Download failed: ${res.status}`)
+    }
+    const blob = await res.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(a.href)
+  } catch (err) {
+    console.error('Download error:', err)
+    alert(`Download failed: ${err.message}`)
+    throw err
+  }
 }
 
 export const meetingApi = {

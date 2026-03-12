@@ -135,7 +135,7 @@ export default function ReportPage() {
   return (
     <div className="min-h-screen bg-gray-950">
       <Navbar meetingId={meeting_id} subtitle="Post-Meeting Report">
-        <DownloadMenu meeting_id={meeting_id} />
+        {/* <DownloadMenu meeting_id={meeting_id} /> */}
         <ExportButton targetId="report-root" filename={`meetmind-report`} />
       </Navbar>
 

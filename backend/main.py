@@ -239,8 +239,32 @@ async def list_meetings():
 
 # ── Downloads ─────────────────────────────────────────────────────────────────
 
+def _resolve_meeting_id(meeting_id: str) -> str:
+    """Resolve meeting_id with fuzzy matching if exact match not found."""
+    session = get_session(meeting_id)
+    if session:
+        return meeting_id
+    
+    # Fallback: try LIKE match
+    from database import _conn
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM sessions WHERE meeting_id LIKE ?",
+            (f"%{meeting_id.split('/')[-1]}%",),
+        ).fetchone()
+    if row:
+        from database import _session_dict
+        session = _session_dict(row)
+        resolved_id = session["meeting_id"]
+        print(f"[Download] Fuzzy matched {meeting_id!r} to {resolved_id!r}")
+        return resolved_id
+    
+    raise HTTPException(404, f"Session not found: {meeting_id}")
+
+
 @app.get("/report/{meeting_id:path}/download/raw")
 async def download_raw(meeting_id: str):
+    meeting_id = _resolve_meeting_id(meeting_id)
     report = get_full_report(meeting_id)
     buf = io.StringIO()
     w = csv.DictWriter(buf, fieldnames=[
@@ -254,6 +278,7 @@ async def download_raw(meeting_id: str):
 
 @app.get("/report/{meeting_id:path}/download/summary")
 async def download_summary(meeting_id: str):
+    meeting_id = _resolve_meeting_id(meeting_id)
     pp = _per_participant_stats(get_full_report(meeting_id).get("logs", []))
     buf = io.StringIO()
     fields = ["participant_name","dominant_emotion","avg_happy","avg_sad","avg_angry",
@@ -275,6 +300,7 @@ async def download_summary(meeting_id: str):
 
 @app.get("/report/{meeting_id:path}/download/metadata")
 async def download_metadata(meeting_id: str):
+    meeting_id = _resolve_meeting_id(meeting_id)
     session = get_session(meeting_id)
     if not session: raise HTTPException(404, "Session not found")
     return StreamingResponse(io.BytesIO(json.dumps(session, indent=2).encode()),
@@ -284,6 +310,7 @@ async def download_metadata(meeting_id: str):
 
 @app.get("/report/{meeting_id:path}/download/zip")
 async def download_zip(meeting_id: str):
+    meeting_id = _resolve_meeting_id(meeting_id)
     report = get_full_report(meeting_id)
     session, logs = report.get("session", {}), report.get("logs", [])
     pp = _per_participant_stats(logs)
