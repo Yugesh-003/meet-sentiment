@@ -10,7 +10,7 @@ export default function EmotionTimeline({ name, timeline = [] }) {
 
   const data = timeline.map((entry) => ({
     time: formatTime(entry.timestamp),
-    ...Object.fromEntries(EMOTION_KEYS.map((k) => [k, Math.round(entry[k] * 100) / 100])),
+    ...Object.fromEntries(EMOTION_KEYS.map((k) => [k, Math.round((entry[k] || 0) * 100)])),
   }))
 
   return (

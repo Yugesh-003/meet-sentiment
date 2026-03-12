@@ -15,14 +15,14 @@ export default function Navbar({ meetingId, subtitle, children }) {
   return (
     <nav className="sticky top-0 z-50 border-b border-gray-800 bg-gray-950/90 backdrop-blur-sm">
       <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4">
-        <Link to="/history" className="flex items-center gap-2 text-violet-400 font-bold text-lg shrink-0">
+        <Link to="/" className="flex items-center gap-2 text-violet-400 font-bold text-lg shrink-0">
           <span className="text-2xl">🧠</span>
           <span className="hidden sm:inline">MeetMind</span>
         </Link>
 
         <div className="flex items-center gap-4 ml-1">
           {navLink('/history', 'History')}
-          {navLink('/live', 'Live')}
+          {/* {navLink('/live', 'Live')} */}
         </div>
 
         {meetingId && (

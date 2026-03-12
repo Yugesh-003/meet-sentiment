@@ -93,11 +93,11 @@ def detect_emotions(image_b64: str) -> list[dict]:
                 emotion_scores: dict = result.get("emotion", {})
                 dominant: str = result.get("dominant_emotion", "neutral")
 
-                # Normalise all emotion keys, defaulting missing to 0
-                scores = {k: float(emotion_scores.get(k, 0.0)) for k in EMOTION_KEYS}
+                # Normalise all emotion keys to 0-1 range (DeepFace returns 0-100)
+                scores = {k: float(emotion_scores.get(k, 0.0)) / 100.0 for k in EMOTION_KEYS}
 
-                # Confidence = score of dominant emotion / 100 (DeepFace returns %)
-                confidence = scores.get(dominant, 0.0) / 100.0
+                # Confidence = score of dominant emotion (already normalized to 0-1)
+                confidence = scores.get(dominant, 0.0)
 
                 print(f"[emotion_detector] Face {face_id}: {dominant} ({confidence:.2f})")
                 results.append(
@@ -148,8 +148,8 @@ def _analyze_whole_frame(frame: np.ndarray) -> list[dict]:
         result = analysis[0] if isinstance(analysis, list) else analysis
         emotion_scores: dict = result.get("emotion", {})
         dominant: str = result.get("dominant_emotion", "neutral")
-        scores = {k: float(emotion_scores.get(k, 0.0)) for k in EMOTION_KEYS}
-        confidence = scores.get(dominant, 0.0) / 100.0
+        scores = {k: float(emotion_scores.get(k, 0.0)) / 100.0 for k in EMOTION_KEYS}
+        confidence = scores.get(dominant, 0.0)
         print(f"[emotion_detector] Whole-frame fallback result: {dominant} ({confidence:.2f})")
         return [{
             "face_id": 0,

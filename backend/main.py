@@ -175,6 +175,9 @@ async def live_emotions(meeting_id: str):
         participants = [dict(r) for r in rows]
         print(f"[/live] Fuzzy match found {len(participants)} participant(s)")
 
+    # Normalize emotion values for old data
+    participants = [_normalize_emotion_values(p) for p in participants]
+
     return {"meeting_id": meeting_id, "participants": participants}
 
 
@@ -353,8 +356,26 @@ def _resolve_name(meeting_id, raw_name, face_index):
     return f"Participant_{idx + 1}"
 
 
+def _normalize_emotion_values(log_entry):
+    """
+    Normalize emotion values to 0-1 range.
+    Old data may have values in 0-100 range, new data is in 0-1 range.
+    Detect and convert if needed.
+    """
+    normalized = dict(log_entry)
+    # Check if any emotion value is > 1.5 (indicating 0-100 range)
+    max_val = max(log_entry.get(k, 0) for k in EMOTION_KEYS)
+    if max_val > 1.5:
+        # Old format (0-100), convert to 0-1
+        for k in EMOTION_KEYS:
+            normalized[k] = log_entry.get(k, 0) / 100.0
+    return normalized
+
+
 def _build_summary(logs):
     if not logs: return {}
+    # Normalize all log entries first
+    logs = [_normalize_emotion_values(l) for l in logs]
     participants = list({l["participant_name"] for l in logs})
     n = len(logs)
     avg = {k: round(sum(l.get(k, 0) for l in logs) / n, 2) for k in EMOTION_KEYS}
@@ -368,6 +389,8 @@ def _build_summary(logs):
 
 def _per_participant_stats(logs):
     from collections import defaultdict
+    # Normalize all log entries first
+    logs = [_normalize_emotion_values(l) for l in logs]
     grouped = defaultdict(list)
     for l in logs:
         grouped[l["participant_name"]].append(l)
