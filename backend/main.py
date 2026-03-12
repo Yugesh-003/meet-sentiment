@@ -60,6 +60,7 @@ async def root():
 
 @app.post("/session/start")
 async def session_start(room_code: str = Query(default="")):
+    print(f"[/session/start] Called with room_code={room_code!r}")
     conference_id = None
     participant_names = []
     space_id = ""
@@ -73,14 +74,19 @@ async def session_start(room_code: str = Query(default="")):
         started_at = conf["started_at"]
         from_api = True
         participant_names = get_conference_participants(conference_id)
+        print(f"[/session/start] Got conference from Meet API: {conference_id!r}")
+    else:
+        print("[/session/start] Meet API returned nothing — using fallback ID")
 
     if not conference_id:
         conference_id = generate_fallback_id(room_code)
+        print(f"[/session/start] Fallback ID generated: {conference_id!r}")
 
     mid = create_session(
         meeting_id=conference_id, space_id=space_id,
         started_at=started_at, participant_names=participant_names,
     )
+    print(f"[/session/start] Session saved to DB with id: {mid!r}")
     return {
         "conference_id": mid, "meeting_id": mid,
         "space_id": space_id, "participant_names": participant_names,
@@ -90,32 +96,50 @@ async def session_start(room_code: str = Query(default="")):
 
 @app.post("/session/end/{meeting_id:path}")
 async def session_end(meeting_id: str):
+    print(f"[/session/end] Called for meeting_id={meeting_id!r}")
     session = end_session(meeting_id)
     if not session:
+        print(f"[/session/end] WARNING: session not found for {meeting_id!r}")
         raise HTTPException(404, "Session not found")
+    print(f"[/session/end] Session ended and updated in DB: {meeting_id!r}")
     report = get_full_report(meeting_id)
     return {"session": session, "summary": _build_summary(report["logs"])}
 
 
 # ── Frame analysis ────────────────────────────────────────────────────────────
 
+_NEUTRAL_FACE = {
+    "face_id": 0,
+    "dominant_emotion": "neutral",
+    "emotion_scores": {k: 0.0 for k in EMOTION_KEYS},
+    "confidence": 0.0,
+    "fallback": True,
+}
+
+
 @app.post("/analyze/frame")
 async def analyze_frame(req: FrameRequest):
+    print(f"[/analyze/frame] Received request | meeting_id={req.meeting_id!r} | participant={req.participant_name!r} | frame_len={len(req.frame)}")
     participant_name = _resolve_name(req.meeting_id, req.participant_name, req.face_index)
     faces = detect_emotions(req.frame)
-    if not faces:
-        return {"meeting_id": req.meeting_id, "participant_name": participant_name, "faces": []}
 
+    # emotion_detector now always returns a non-empty list, but guard anyway
+    if not faces:
+        print("[/analyze/frame] detector returned empty — substituting neutral fallback")
+        faces = [dict(_NEUTRAL_FACE)]
+
+    written = 0
     for face in faces:
-        if "error" in face:
-            continue
         face_name = _resolve_name(req.meeting_id, req.participant_name, face["face_id"])
         insert_emotion_log(
             meeting_id=req.meeting_id, participant_name=face_name,
             face_id=face["face_id"], dominant_emotion=face["dominant_emotion"],
-            emotions=face["emotion_scores"], confidence=face["confidence"],
+            emotions=face.get("emotion_scores", {k: 0.0 for k in EMOTION_KEYS}),
+            confidence=face.get("confidence", 0.0),
         )
+        written += 1
 
+    print(f"[/analyze/frame] Wrote {written} face(s) to DB | emotions={[f['dominant_emotion'] for f in faces]}")
     return {"meeting_id": req.meeting_id, "participant_name": participant_name, "faces": faces}
 
 
@@ -123,7 +147,35 @@ async def analyze_frame(req: FrameRequest):
 
 @app.get("/live/{meeting_id:path}")
 async def live_emotions(meeting_id: str):
-    return {"meeting_id": meeting_id, "participants": get_latest_emotions(meeting_id)}
+    print(f"[/live] GET called with meeting_id={meeting_id!r}")
+
+    # Try exact match first
+    participants = get_latest_emotions(meeting_id)
+    print(f"[/live] Exact match found {len(participants)} participant(s)")
+
+    # Fuzzy fallback: the extension sends the short room code (e.g. 'atu-nmaf-bhh')
+    # but the DB might store the full Meet API path (e.g. 'conferenceRecords/abc123')
+    if not participants:
+        print(f"[/live] No exact match — trying LIKE fuzzy match for {meeting_id!r}")
+        # Extract the last segment (room code) in case a full path was passed
+        short_id = meeting_id.split('/')[-1]
+        from database import _conn
+        with _conn() as conn:
+            rows = conn.execute(
+                """SELECT * FROM emotion_logs
+                   WHERE (meeting_id = ? OR meeting_id LIKE ? OR meeting_id LIKE ?)
+                   AND id IN (
+                     SELECT MAX(id) FROM emotion_logs
+                     WHERE meeting_id = ? OR meeting_id LIKE ? OR meeting_id LIKE ?
+                     GROUP BY participant_name
+                   ) ORDER BY participant_name""",
+                (meeting_id, f"%{short_id}%", f"%{meeting_id}%",
+                 meeting_id, f"%{short_id}%", f"%{meeting_id}%"),
+            ).fetchall()
+        participants = [dict(r) for r in rows]
+        print(f"[/live] Fuzzy match found {len(participants)} participant(s)")
+
+    return {"meeting_id": meeting_id, "participants": participants}
 
 
 @app.get("/report/{meeting_id:path}")
@@ -162,7 +214,9 @@ async def full_report(meeting_id: str):
 
 @app.get("/meetings")
 async def list_meetings():
+    print("[/meetings] GET called")
     sessions = list_ended_sessions_with_data()
+    print(f"[/meetings] Found {len(sessions)} session(s) with emotion data")
     result = []
     for s in sessions:
         mid = s["meeting_id"]

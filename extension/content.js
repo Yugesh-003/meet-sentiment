@@ -5,6 +5,8 @@
  * On START_CAPTURE: calls /session/start, stores conference_id, begins interval.
  * On STOP_CAPTURE or page unload: clears interval, calls /session/end.
  * Filters out self-preview video tile (smallest video or data-self-name).
+ * 
+ * ONLY activates on actual Google Meet call URLs (not landing pages).
  */
 
 const API = 'http://localhost:8000';
@@ -17,6 +19,12 @@ let participantNames = [];
 let captureTimer     = null;
 let capturing        = false;
 
+// ── Meeting URL detection ────────────────────────────────────────────────────
+function isInActiveMeeting() {
+  const path = window.location.pathname;
+  return /^\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/i.test(path);
+}
+
 const canvas = document.createElement('canvas');
 canvas.width  = CANVAS_W;
 canvas.height = CANVAS_H;
@@ -24,6 +32,12 @@ const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
 // ── Boot: restore state (in case page refreshes while capturing) ─────────────
 chrome.storage.local.get(['capturing', 'conference_id', 'participant_names'], (data) => {
+  // Only proceed if we're in an actual meeting
+  if (!isInActiveMeeting()) {
+    console.log('[MeetMind] Not in active meeting, skipping boot');
+    return;
+  }
+
   conferenceId     = data.conference_id || null;
   participantNames = data.participant_names || [];
   capturing        = !!data.capturing;
@@ -36,6 +50,13 @@ chrome.storage.local.get(['capturing', 'conference_id', 'participant_names'], (d
 // ── Message listener from popup ──────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   console.log('[MeetMind] Got message:', msg.type);
+
+  // Only process capture messages if in active meeting
+  if (!isInActiveMeeting()) {
+    console.log('[MeetMind] Ignoring message - not in active meeting');
+    sendResponse({ ok: false, error: 'Not in active meeting' });
+    return true;
+  }
 
   if (msg.type === 'START_CAPTURE') {
     handleStartCapture().then(() => sendResponse({ ok: true }));
@@ -84,19 +105,26 @@ async function handleStartCapture() {
 
 // ── Stop capture ─────────────────────────────────────────────────────────────
 async function handleStopCapture() {
-  console.log('[MeetMind] Stopping capture...');
+  console.log('[MeetMind] Stopping capture | conferenceId:', conferenceId);
   capturing = false;
   clearInterval(captureTimer);
   captureTimer = null;
 
   // End session on backend
   if (conferenceId) {
+    console.log('[MeetMind] Calling POST /session/end for:', conferenceId);
     try {
-      await fetch(`${API}/session/end/${encodeURIComponent(conferenceId)}`, { method: 'POST' });
-      console.log('[MeetMind] Session ended:', conferenceId);
+      const res = await fetch(`${API}/session/end/${encodeURIComponent(conferenceId)}`, { method: 'POST' });
+      if (res.ok) {
+        console.log('[MeetMind] Session ended successfully:', conferenceId);
+      } else {
+        console.warn('[MeetMind] Session end returned status:', res.status, 'for:', conferenceId);
+      }
     } catch (err) {
-      console.warn('[MeetMind] Could not end session:', err);
+      console.warn('[MeetMind] Could not end session:', err.message);
     }
+  } else {
+    console.warn('[MeetMind] handleStopCapture: conferenceId is null — session/end skipped');
   }
 
   await chrome.storage.local.set({ capturing: false });
@@ -231,11 +259,14 @@ function extractNameFromDom(video) {
 // ── Cleanup on page unload ───────────────────────────────────────────────────
 window.addEventListener('beforeunload', () => {
   if (capturing && conferenceId) {
+    console.log('[MeetMind] beforeunload: sending session/end beacon for', conferenceId);
     // Best-effort session end — navigator.sendBeacon for reliability
     navigator.sendBeacon(
       `${API}/session/end/${encodeURIComponent(conferenceId)}`,
       new Blob([], { type: 'application/json' })
     );
+  } else {
+    console.log('[MeetMind] beforeunload: capturing=', capturing, 'conferenceId=', conferenceId, '— no beacon sent');
   }
 });
 
@@ -249,3 +280,17 @@ document.addEventListener('visibilitychange', () => {
     startCaptureLoop();
   }
 });
+
+// ── Watch for URL changes (SPA navigation) ───────────────────────────────────
+new MutationObserver(() => {
+  const inMeeting = isInActiveMeeting();
+  if (inMeeting && !captureTimer && capturing) {
+    // Navigated into a meeting while capturing was active
+    console.log('[MeetMind] SPA nav: navigated INTO meeting, resuming capture loop');
+    startCaptureLoop();
+  } else if (!inMeeting && captureTimer) {
+    // Navigated AWAY from the meeting — stop capture AND end the session
+    console.log('[MeetMind] SPA nav: navigated AWAY from meeting | conferenceId:', conferenceId);
+    handleStopCapture();
+  }
+}).observe(document, { subtree: true, childList: true });

@@ -98,19 +98,21 @@ def get_session_participant_names(meeting_id):
 
 def list_ended_sessions_with_data():
     """
-    Return ONLY sessions that are ended AND have at least 1 emotion_log.
-    Used for the History page — no active/empty sessions.
+    Return sessions that have at least 1 emotion_log.
+    Does NOT require ended_at to be set — sessions show up in history
+    as long as frames were captured, even if session/end never fired.
     """
+    print("[database] list_ended_sessions_with_data called")
     with _conn() as conn:
         rows = conn.execute("""
             SELECT s.*, COUNT(e.id) AS total_frames
             FROM sessions s
             INNER JOIN emotion_logs e ON s.meeting_id = e.meeting_id
-            WHERE s.status = 'ended' AND s.ended_at IS NOT NULL
             GROUP BY s.meeting_id
             HAVING COUNT(e.id) > 0
             ORDER BY s.started_at DESC
         """).fetchall()
+    print(f"[database] Found {len(rows)} session(s) with emotion data")
     result = []
     for r in rows:
         d = _session_dict(r)
@@ -146,7 +148,13 @@ def insert_emotion_log(meeting_id, participant_name, face_id, dominant_emotion, 
 
 
 def get_latest_emotions(meeting_id):
-    """Most recent emotion log per participant (by MAX id)."""
+    """
+    Most recent emotion log per participant (by MAX id).
+    Tries exact match first; falls back to LIKE match to handle
+    mismatches between short room codes and full Meet API conference IDs.
+    """
+    print(f"[database] get_latest_emotions called with meeting_id={meeting_id!r}")
+
     with _conn() as conn:
         rows = conn.execute(
             """SELECT * FROM emotion_logs
@@ -155,6 +163,31 @@ def get_latest_emotions(meeting_id):
                ) ORDER BY participant_name""",
             (meeting_id, meeting_id),
         ).fetchall()
+
+    print(f"[database] Exact match found {len(rows)} row(s)")
+
+    if rows:
+        return [dict(r) for r in rows]
+
+    # Fuzzy fallback: strip any leading path segments and match by the short code
+    # e.g. meeting_id='atu-nmaf-bhh' matches stored 'conferenceRecords/xyz?roomCode=atu-nmaf-bhh'
+    short_id = meeting_id.split("/")[-1]
+    print(f"[database] Trying LIKE fallback with short_id={short_id!r}")
+
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM emotion_logs
+               WHERE (meeting_id LIKE ? OR meeting_id LIKE ?)
+               AND id IN (
+                 SELECT MAX(id) FROM emotion_logs
+                 WHERE meeting_id LIKE ? OR meeting_id LIKE ?
+                 GROUP BY participant_name
+               ) ORDER BY participant_name""",
+            (f"%{short_id}%", f"%{meeting_id}%",
+             f"%{short_id}%", f"%{meeting_id}%"),
+        ).fetchall()
+
+    print(f"[database] LIKE fallback found {len(rows)} row(s)")
     return [dict(r) for r in rows]
 
 
