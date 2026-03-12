@@ -1,79 +1,148 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <title>Meet Sentiment</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { width: 300px; font-family: 'Segoe UI', sans-serif; background: #111827; color: #f9fafb; padding: 16px; }
-    h1 { font-size: 13px; font-weight: 700; letter-spacing: .5px; margin-bottom: 12px;
-         background: linear-gradient(90deg, #60a5fa, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-    
-    /* Controls */
-    .controls { display: flex; gap: 8px; margin-bottom: 14px; }
-    button { flex: 1; padding: 6px 0; border: none; border-radius: 8px; font-size: 12px; font-weight: 600;
-             cursor: pointer; transition: opacity .2s; }
-    #btn-start { background: #3b82f6; color: #fff; }
-    #btn-stop  { background: #374151; color: #9ca3af; }
-    button:hover { opacity: .85; }
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MeetMind</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 340px; min-height: 200px; max-height: 520px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f172a; color: #e2e8f0;
+    overflow-y: auto;
+  }
 
-    /* Section headers */
-    .section-title { font-size: 10px; font-weight: 700; text-transform: uppercase;
-                     letter-spacing: 1px; color: #6b7280; margin: 10px 0 6px; }
+  /* Header */
+  .header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 14px 16px; border-bottom: 1px solid #1e293b;
+    background: #0f172a;
+  }
+  .header .logo { font-size: 22px; }
+  .header .title { font-size: 15px; font-weight: 700; color: #a78bfa; }
+  .header .mid {
+    margin-left: auto; font-size: 10px; font-family: monospace;
+    color: #64748b; background: #1e293b; padding: 3px 8px;
+    border-radius: 999px;
+  }
 
-    /* Sentiment */
-    #sentiment-label { font-size: 24px; font-weight: 800; text-align: center; margin: 4px 0 8px; }
-    .label-POSITIVE { color: #34d399; } .label-NEGATIVE { color: #f87171; } .label-NEUTRAL { color: #9ca3af; }
+  /* Toggle row */
+  .toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; border-bottom: 1px solid #1e293b;
+    background: #1e293b40;
+  }
+  .toggle-label {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; font-weight: 600;
+  }
+  .pulse-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: #ef4444;
+    animation: pulse-glow 1.2s infinite;
+  }
+  @keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,.6); }
+    50% { box-shadow: 0 0 0 6px rgba(239,68,68,0); }
+  }
+  .toggle-label .off-text { color: #64748b; }
 
-    /* Bars */
-    .bars { display: flex; flex-direction: column; gap: 5px; }
-    .bar-row { display: flex; align-items: center; gap: 8px; font-size: 11px; }
-    .bar-row span.name { width: 52px; text-align: right; color: #9ca3af; }
-    .bar-bg { flex: 1; height: 7px; background: #1f2937; border-radius: 99px; overflow: hidden; }
-    .bar-fill { height: 100%; border-radius: 99px; transition: width .5s ease; }
-    .fill-pos { background: #34d399; } .fill-neg { background: #f87171; } .fill-neu { background: #6b7280; }
-    .bar-row span.val { width: 30px; font-size: 10px; color: #6b7280; }
+  /* Toggle switch */
+  .switch { position: relative; width: 44px; height: 24px; cursor: pointer; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute; inset: 0; background: #334155; border-radius: 999px;
+    transition: .3s;
+  }
+  .slider::before {
+    content: ''; position: absolute; width: 18px; height: 18px;
+    left: 3px; bottom: 3px; background: #94a3b8; border-radius: 50%;
+    transition: .3s;
+  }
+  .switch input:checked + .slider { background: #7c3aed; }
+  .switch input:checked + .slider::before {
+    transform: translateX(20px); background: #ffffff;
+  }
+  .switch input:disabled + .slider { opacity: .4; cursor: not-allowed; }
 
-    /* Emotion */
-    #emotion-label { font-size: 18px; font-weight: 700; text-align: center; color: #fbbf24; margin: 4px 0 6px; }
-    .emotion-bars { display: flex; flex-direction: column; gap: 4px; }
-    .ebar-row { display: flex; align-items: center; gap: 6px; font-size: 10px; }
-    .ebar-row span.name { width: 60px; text-align: right; color: #9ca3af; text-transform: capitalize; }
-    .ebar-bg { flex: 1; height: 5px; background: #1f2937; border-radius: 99px; overflow: hidden; }
-    .ebar-fill { height: 100%; border-radius: 99px; background: #fbbf24; transition: width .5s ease; }
-    .ebar-row span.val { width: 30px; font-size: 10px; color: #6b7280; }
+  /* Not on meet banner */
+  .not-on-meet {
+    padding: 24px 16px; text-align: center; color: #64748b; font-size: 13px;
+  }
+  .not-on-meet .icon { font-size: 32px; margin-bottom: 8px; }
 
-    /* Caption preview */
-    #caption { font-size: 10px; color: #4b5563; margin-top: 10px; font-style: italic;
-               max-height: 36px; overflow: hidden; }
+  /* Participant list */
+  .participants { padding: 8px 12px; }
+  .card {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; background: #1e293b; border-radius: 12px;
+    margin-bottom: 6px;
+  }
+  .card .emoji { font-size: 28px; flex-shrink: 0; }
+  .card .info { flex: 1; min-width: 0; }
+  .card .name {
+    font-size: 12px; font-weight: 600; color: #f1f5f9;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .emotion-row { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+  .emotion-label { font-size: 11px; font-weight: 700; text-transform: capitalize; }
+  .conf { font-size: 10px; color: #64748b; font-family: monospace; }
+  .bar-bg {
+    height: 4px; background: #334155; border-radius: 999px;
+    margin-top: 4px; overflow: hidden;
+  }
+  .bar-fill { height: 100%; border-radius: 999px; transition: width .4s; }
 
-    .divider { border: none; border-top: 1px solid #1f2937; margin: 10px 0; }
-  </style>
+  /* Waiting / empty */
+  .empty { padding: 20px; text-align: center; color: #475569; font-size: 12px; }
+
+  /* Report button */
+  .footer {
+    padding: 10px 16px; border-top: 1px solid #1e293b;
+  }
+  .btn-report {
+    display: block; width: 100%; padding: 10px;
+    background: #7c3aed; color: #fff; border: none; border-radius: 10px;
+    font-size: 13px; font-weight: 700; cursor: pointer;
+    text-align: center; transition: background .2s;
+  }
+  .btn-report:hover { background: #6d28d9; }
+  .btn-report:disabled { opacity: .35; cursor: not-allowed; }
+</style>
 </head>
 <body>
-  <h1>🎙 Meet Sentiment</h1>
 
-  <div class="controls">
-    <button id="btn-start">▶ Start Capture</button>
-    <button id="btn-stop">■ Stop</button>
+  <!-- Header -->
+  <div class="header">
+    <span class="logo">🧠</span>
+    <span class="title">MeetMind</span>
+    <span class="mid" id="meeting-id">—</span>
   </div>
 
-  <!-- Text Sentiment -->
-  <div class="section-title">💬 Caption Sentiment</div>
-  <div id="sentiment-label">—</div>
-  <div class="bars">
-    <div class="bar-row"><span class="name">Positive</span><div class="bar-bg"><div class="bar-fill fill-pos" id="bar-pos" style="width:0%"></div></div><span class="val" id="val-pos">0%</span></div>
-    <div class="bar-row"><span class="name">Negative</span><div class="bar-bg"><div class="bar-fill fill-neg" id="bar-neg" style="width:0%"></div></div><span class="val" id="val-neg">0%</span></div>
-    <div class="bar-row"><span class="name">Neutral</span><div class="bar-bg"><div class="bar-fill fill-neu" id="bar-neu" style="width:0%"></div></div><span class="val" id="val-neu">0%</span></div>
+  <!-- Not on Meet banner (shown when not on meet.google.com) -->
+  <div class="not-on-meet" id="not-on-meet" style="display:none;">
+    <div class="icon">🎥</div>
+    Join a Google Meet to start
   </div>
-  <div id="caption"></div>
 
-  <hr class="divider"/>
+  <!-- Toggle row -->
+  <div class="toggle-row" id="toggle-row" style="display:none;">
+    <div class="toggle-label" id="toggle-label">
+      <span class="off-text">Click to start capturing</span>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="toggle" />
+      <span class="slider"></span>
+    </label>
+  </div>
 
-  <!-- Facial Emotion -->
-  <div class="section-title">😐 Facial Emotion</div>
-  <div id="emotion-label">—</div>
-  <div class="emotion-bars" id="emotion-bars"></div>
+  <!-- Participant cards -->
+  <div class="participants" id="participant-list"></div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <button class="btn-report" id="btn-report" disabled>View Full Report →</button>
+  </div>
 
   <script src="popup.js"></script>
 </body>

@@ -1,70 +1,98 @@
 """
-main.py — FastAPI server for MeetMind
+main.py — MeetMind FastAPI server (redesigned)
+
 Endpoints:
-  POST /session/start
-  POST /session/end/{meeting_id}
-  POST /analyze/frame
-  GET  /live/{meeting_id}
-  GET  /report/{meeting_id}
-  GET  /
+  POST /session/start       → create session with real Meet API conference ID
+  POST /session/end/{id}    → end session
+  POST /analyze/frame       → emotion detection + DB insert
+  GET  /live/{id}           → latest emotion per participant
+  GET  /report/{id}         → full report
+  GET  /meetings            → ended sessions with emotion data ONLY
+  GET  /report/{id}/download/*  → CSV/JSON/ZIP downloads
+  GET  /meetings/download/all  → master CSV
 """
 
-from fastapi import FastAPI, HTTPException
+import csv
+import io
+import json
+import zipfile
+from typing import Optional
+
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from database import (
-    create_session,
-    end_session,
-    get_session,
-    insert_emotion_log,
-    get_latest_emotions,
-    get_full_report,
+    count_frames, create_session, end_session,
+    get_dominant_emotions_per_participant, get_full_report,
+    get_latest_emotions, get_session, get_session_participant_names,
+    insert_emotion_log, list_ended_sessions_with_data,
 )
 from emotion_detector import detect_emotions
-
-app = FastAPI(title="MeetMind API", version="1.0.0")
-
-# Allow Chrome extension (chrome-extension://*) and local dev frontend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+from meet_api import (
+    generate_fallback_id, get_conference_participants,
+    get_latest_conference,
 )
 
+app = FastAPI(title="MeetMind API", version="3.0.0")
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_credentials=True,
+    allow_methods=["*"], allow_headers=["*"],
+)
 
-# ── Request / Response models ─────────────────────────────────────────────────
+EMOTION_KEYS = ["happy", "sad", "angry", "fear", "surprise", "disgust", "neutral"]
+
 
 class FrameRequest(BaseModel):
-    frame: str                  # base64 JPEG
+    frame: str
     participant_name: str = "unknown"
     meeting_id: str = "demo"
+    face_index: Optional[int] = None
 
-
-# ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/")
 async def root():
-    return {"service": "MeetMind API", "status": "running"}
+    return {"service": "MeetMind API", "version": "3.0.0", "status": "running"}
 
 
-# ── Session endpoints ─────────────────────────────────────────────────────────
+# ── Session ───────────────────────────────────────────────────────────────────
 
 @app.post("/session/start")
-async def session_start():
-    """Create a new meeting session and return its ID."""
-    meeting_id = create_session()
-    return {"meeting_id": meeting_id, "status": "started"}
+async def session_start(room_code: str = Query(default="")):
+    conference_id = None
+    participant_names = []
+    space_id = ""
+    started_at = None
+    from_api = False
+
+    conf = get_latest_conference()
+    if conf:
+        conference_id = conf["conference_id"]
+        space_id = conf["space_id"]
+        started_at = conf["started_at"]
+        from_api = True
+        participant_names = get_conference_participants(conference_id)
+
+    if not conference_id:
+        conference_id = generate_fallback_id(room_code)
+
+    mid = create_session(
+        meeting_id=conference_id, space_id=space_id,
+        started_at=started_at, participant_names=participant_names,
+    )
+    return {
+        "conference_id": mid, "meeting_id": mid,
+        "space_id": space_id, "participant_names": participant_names,
+        "from_api": from_api, "status": "started",
+    }
 
 
-@app.post("/session/end/{meeting_id}")
+@app.post("/session/end/{meeting_id:path}")
 async def session_end(meeting_id: str):
-    """Finalise a session and return its summary."""
     session = end_session(meeting_id)
     if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(404, "Session not found")
     report = get_full_report(meeting_id)
     return {"session": session, "summary": _build_summary(report["logs"])}
 
@@ -73,112 +101,233 @@ async def session_end(meeting_id: str):
 
 @app.post("/analyze/frame")
 async def analyze_frame(req: FrameRequest):
-    """
-    Detect all faces in the frame, run DeepFace emotion analysis,
-    and persist each result to the session log.
-    """
+    participant_name = _resolve_name(req.meeting_id, req.participant_name, req.face_index)
     faces = detect_emotions(req.frame)
-
     if not faces:
-        return {"meeting_id": req.meeting_id, "faces": [], "participant_name": req.participant_name}
+        return {"meeting_id": req.meeting_id, "participant_name": participant_name, "faces": []}
 
     for face in faces:
         if "error" in face:
             continue
+        face_name = _resolve_name(req.meeting_id, req.participant_name, face["face_id"])
         insert_emotion_log(
-            meeting_id=req.meeting_id,
-            participant_name=req.participant_name,
-            face_id=face["face_id"],
-            dominant_emotion=face["dominant_emotion"],
-            emotions=face["emotion_scores"],
-            confidence=face["confidence"],
+            meeting_id=req.meeting_id, participant_name=face_name,
+            face_id=face["face_id"], dominant_emotion=face["dominant_emotion"],
+            emotions=face["emotion_scores"], confidence=face["confidence"],
         )
 
-    return {
-        "meeting_id": req.meeting_id,
-        "participant_name": req.participant_name,
-        "faces": faces,
-    }
+    return {"meeting_id": req.meeting_id, "participant_name": participant_name, "faces": faces}
 
 
-# ── Live & Report endpoints ───────────────────────────────────────────────────
+# ── Live & Report ─────────────────────────────────────────────────────────────
 
-@app.get("/live/{meeting_id}")
+@app.get("/live/{meeting_id:path}")
 async def live_emotions(meeting_id: str):
-    """Return the latest detected emotion per participant."""
-    latest = get_latest_emotions(meeting_id)
-    return {"meeting_id": meeting_id, "participants": latest}
+    return {"meeting_id": meeting_id, "participants": get_latest_emotions(meeting_id)}
 
 
-@app.get("/report/{meeting_id}")
+@app.get("/report/{meeting_id:path}")
 async def full_report(meeting_id: str):
-    """Return the full per-person emotion timeline and summary stats."""
+    print(f"[MeetMind] GET /report/{meeting_id}")
     session = get_session(meeting_id)
+
+    # Fallback: try LIKE match if exact ID not found
+    # (handles short IDs vs full conferenceRecords/xyz paths)
     if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+        from database import _conn
+        with _conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM sessions WHERE meeting_id LIKE ?",
+                (f"%{meeting_id.split('/')[-1]}%",),
+            ).fetchone()
+        if row:
+            from database import _session_dict
+            session = _session_dict(row)
+            meeting_id = session["meeting_id"]  # use the full stored ID
+            print(f"[MeetMind] Fuzzy matched to: {meeting_id}")
+
+    if not session:
+        raise HTTPException(404, f"Session not found: {meeting_id}")
+
     report = get_full_report(meeting_id)
     logs = report["logs"]
     return {
-        "session": session,
-        "logs": logs,
+        "session": session, "logs": logs,
         "summary": _build_summary(logs),
         "per_participant": _per_participant_stats(logs),
     }
 
 
-# ── Internal helpers ──────────────────────────────────────────────────────────
+# ── Meetings list — ONLY ended sessions with emotion data ────────────────────
 
-EMOTION_KEYS = ["happy", "sad", "angry", "fear", "surprise", "disgust", "neutral"]
+@app.get("/meetings")
+async def list_meetings():
+    sessions = list_ended_sessions_with_data()
+    result = []
+    for s in sessions:
+        mid = s["meeting_id"]
+        dominant = get_dominant_emotions_per_participant(mid)
+        result.append({
+            "conference_id": mid,
+            "space_id": s.get("space_id", ""),
+            "started_at": s["started_at"],
+            "ended_at": s.get("ended_at"),
+            "duration_seconds": s.get("duration_seconds", 0),
+            "participant_names": s.get("participant_names", []),
+            "total_frames": s.get("total_frames", 0),
+            "dominant_emotions": dominant,
+        })
+    return {"meetings": result, "total": len(result)}
 
 
-def _build_summary(logs: list[dict]) -> dict:
-    if not logs:
-        return {}
+# ── Downloads ─────────────────────────────────────────────────────────────────
+
+@app.get("/report/{meeting_id:path}/download/raw")
+async def download_raw(meeting_id: str):
+    report = get_full_report(meeting_id)
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=[
+        "timestamp","participant_name","dominant_emotion",
+        "happy","sad","angry","fear","surprise","disgust","neutral","confidence",
+    ], extrasaction="ignore")
+    w.writeheader(); w.writerows(report.get("logs", []))
+    return StreamingResponse(io.BytesIO(buf.getvalue().encode()), media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="emotions_raw.csv"'})
+
+
+@app.get("/report/{meeting_id:path}/download/summary")
+async def download_summary(meeting_id: str):
+    pp = _per_participant_stats(get_full_report(meeting_id).get("logs", []))
+    buf = io.StringIO()
+    fields = ["participant_name","dominant_emotion","avg_happy","avg_sad","avg_angry",
+              "avg_fear","avg_surprise","avg_disgust","avg_neutral",
+              "engagement_score","stress_index","total_samples"]
+    w = csv.DictWriter(buf, fieldnames=fields)
+    w.writeheader()
+    for p in pp:
+        avg = p.get("avg_emotions", {})
+        w.writerow({
+            "participant_name": p["participant_name"], "dominant_emotion": p["dominant_emotion"],
+            **{f"avg_{k}": avg.get(k, 0) for k in EMOTION_KEYS},
+            "engagement_score": p["engagement_score"], "stress_index": p["stress_index"],
+            "total_samples": p["frame_count"],
+        })
+    return StreamingResponse(io.BytesIO(buf.getvalue().encode()), media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="emotions_summary.csv"'})
+
+
+@app.get("/report/{meeting_id:path}/download/metadata")
+async def download_metadata(meeting_id: str):
+    session = get_session(meeting_id)
+    if not session: raise HTTPException(404, "Session not found")
+    return StreamingResponse(io.BytesIO(json.dumps(session, indent=2).encode()),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="meeting_metadata.json"'})
+
+
+@app.get("/report/{meeting_id:path}/download/zip")
+async def download_zip(meeting_id: str):
+    report = get_full_report(meeting_id)
+    session, logs = report.get("session", {}), report.get("logs", [])
+    pp = _per_participant_stats(logs)
+
+    zbuf = io.BytesIO()
+    with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as zf:
+        raw = io.StringIO()
+        rw = csv.DictWriter(raw, fieldnames=[
+            "timestamp","participant_name","dominant_emotion",
+            "happy","sad","angry","fear","surprise","disgust","neutral","confidence",
+        ], extrasaction="ignore")
+        rw.writeheader(); rw.writerows(logs)
+        zf.writestr("emotions_raw.csv", raw.getvalue())
+
+        sbuf = io.StringIO()
+        sw = csv.DictWriter(sbuf, fieldnames=[
+            "participant_name","dominant_emotion","avg_happy","avg_sad","avg_angry",
+            "avg_fear","avg_surprise","avg_disgust","avg_neutral",
+            "engagement_score","stress_index","total_samples",
+        ])
+        sw.writeheader()
+        for p in pp:
+            avg = p.get("avg_emotions", {})
+            sw.writerow({
+                "participant_name": p["participant_name"], "dominant_emotion": p["dominant_emotion"],
+                **{f"avg_{k}": avg.get(k, 0) for k in EMOTION_KEYS},
+                "engagement_score": p["engagement_score"], "stress_index": p["stress_index"],
+                "total_samples": p["frame_count"],
+            })
+        zf.writestr("emotions_summary.csv", sbuf.getvalue())
+        zf.writestr("meeting_metadata.json", json.dumps(session, indent=2))
+
+    zbuf.seek(0)
+    return StreamingResponse(zbuf, media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="meetmind_{meeting_id.split("/")[-1]}.zip"'})
+
+
+@app.get("/meetings/download/all")
+async def download_all():
+    sessions = list_ended_sessions_with_data()
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=[
+        "conference_id","date","participant_name","dominant_emotion",
+        "happy","sad","angry","fear","surprise","disgust","neutral","confidence","timestamp",
+    ], extrasaction="ignore")
+    w.writeheader()
+    for s in sessions:
+        mid = s["meeting_id"]
+        date = (s.get("started_at") or "")[:10]
+        for log in get_full_report(mid).get("logs", []):
+            w.writerow({"conference_id": mid, "date": date,
+                **{k: log.get(k, "") for k in [
+                    "participant_name","dominant_emotion","happy","sad","angry",
+                    "fear","surprise","disgust","neutral","confidence","timestamp",
+                ]}})
+    return StreamingResponse(io.BytesIO(buf.getvalue().encode()), media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="meetmind_all.csv"'})
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _resolve_name(meeting_id, raw_name, face_index):
+    placeholders = {"frame_person", "unknown", "", "participant"}
+    if raw_name and raw_name.lower() not in placeholders:
+        return raw_name
+    names = get_session_participant_names(meeting_id)
+    idx = face_index or 0
+    if names and idx < len(names):
+        return names[idx]
+    return f"Participant_{idx + 1}"
+
+
+def _build_summary(logs):
+    if not logs: return {}
     participants = list({l["participant_name"] for l in logs})
-    total_frames = len(logs)
-
-    # Average emotion scores across all frames
-    avg = {k: 0.0 for k in EMOTION_KEYS}
-    for log in logs:
-        for k in EMOTION_KEYS:
-            avg[k] += log.get(k, 0)
-    avg = {k: round(v / total_frames, 2) for k, v in avg.items()}
-
-    engagement = round((avg["happy"] + avg["surprise"]) * 100 - (avg["sad"] + avg["angry"] + avg["disgust"]) * 50, 1)
+    n = len(logs)
+    avg = {k: round(sum(l.get(k, 0) for l in logs) / n, 2) for k in EMOTION_KEYS}
+    eng = round((avg["happy"] + avg["surprise"]) * 100 - (avg["sad"] + avg["angry"] + avg["disgust"]) * 50, 1)
     stress = round((avg["angry"] + avg["fear"] + avg["disgust"]) * 100, 1)
-
     return {
-        "total_participants": len(participants),
-        "total_frames": total_frames,
-        "avg_emotions": avg,
-        "engagement_score": max(0, min(100, engagement)),
-        "stress_index": max(0, min(100, stress)),
+        "total_participants": len(participants), "total_frames": n, "avg_emotions": avg,
+        "engagement_score": max(0, min(100, eng)), "stress_index": max(0, min(100, stress)),
     }
 
 
-def _per_participant_stats(logs: list[dict]) -> list[dict]:
-    """Group logs by participant and compute individual stats."""
+def _per_participant_stats(logs):
     from collections import defaultdict
-    grouped: dict[str, list[dict]] = defaultdict(list)
-    for log in logs:
-        grouped[log["participant_name"]].append(log)
-
+    grouped = defaultdict(list)
+    for l in logs:
+        grouped[l["participant_name"]].append(l)
     result = []
     for name, entries in grouped.items():
         n = len(entries)
         avg = {k: round(sum(e.get(k, 0) for e in entries) / n, 2) for k in EMOTION_KEYS}
-        # dominant = emotion with highest avg
         dominant = max(avg, key=lambda k: avg[k])
-        engagement = round((avg["happy"] + avg["surprise"]) * 100 - (avg["sad"] + avg["angry"] + avg["disgust"]) * 50, 1)
+        eng = round((avg["happy"] + avg["surprise"]) * 100 - (avg["sad"] + avg["angry"] + avg["disgust"]) * 50, 1)
         stress = round((avg["angry"] + avg["fear"] + avg["disgust"]) * 100, 1)
-
         result.append({
-            "participant_name": name,
-            "frame_count": n,
-            "avg_emotions": avg,
+            "participant_name": name, "frame_count": n, "avg_emotions": avg,
             "dominant_emotion": dominant,
-            "engagement_score": max(0, min(100, engagement)),
-            "stress_index": max(0, min(100, stress)),
+            "engagement_score": max(0, min(100, eng)), "stress_index": max(0, min(100, stress)),
             "timeline": entries,
         })
     return result

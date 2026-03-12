@@ -1,92 +1,161 @@
 /**
- * popup.js — handles both caption sentiment and facial emotion live updates
+ * popup.js — MeetMind popup with toggle switch
+ *
+ * Toggle ON  → START_CAPTURE message to content.js → polls /live
+ * Toggle OFF → STOP_CAPTURE message to content.js → stops polling
+ * Only interactive when user is on meet.google.com
  */
 
-const EMOTION_COLORS = {
-  happy:    "#34d399",
-  sad:      "#60a5fa",
-  angry:    "#f87171",
-  fear:     "#c084fc",
-  surprise: "#fbbf24",
-  neutral:  "#9ca3af",
-  disgust:  "#a3e635",
-};
+const API = 'http://localhost:8000';
+const DASHBOARD = 'http://localhost:5173';
+const POLL_MS = 3000;
 
-function pct(v) { return Math.round(v * 100); }
+const EMOJI  = { happy:'😊', sad:'😢', angry:'😠', fear:'😨', surprise:'😲', neutral:'😐', disgust:'🤢' };
+const COLORS = { happy:'#22c55e', sad:'#3b82f6', angry:'#ef4444', fear:'#f97316', surprise:'#a855f7', disgust:'#84cc16', neutral:'#94a3b8' };
 
-// ── Sentiment panel ───────────────────────────────────────────────────────────
-function updateSentiment(data) {
-  const { scores, label, text } = data;
-  const labelEl = document.getElementById("sentiment-label");
-  labelEl.textContent = label;
-  labelEl.className = `label-${label}`;
+let pollTimer = null;
+let conferenceId = null;
 
-  document.getElementById("bar-pos").style.width = `${pct(scores.pos)}%`;
-  document.getElementById("val-pos").textContent = `${pct(scores.pos)}%`;
-  document.getElementById("bar-neg").style.width = `${pct(scores.neg)}%`;
-  document.getElementById("val-neg").textContent = `${pct(scores.neg)}%`;
-  document.getElementById("bar-neu").style.width = `${pct(scores.neu)}%`;
-  document.getElementById("val-neu").textContent = `${pct(scores.neu)}%`;
+// ── Elements ──────────────────────────────────────────────────────────────────
+const elMeetingId     = document.getElementById('meeting-id');
+const elNotOnMeet     = document.getElementById('not-on-meet');
+const elToggleRow     = document.getElementById('toggle-row');
+const elToggle        = document.getElementById('toggle');
+const elToggleLabel   = document.getElementById('toggle-label');
+const elList          = document.getElementById('participant-list');
+const elBtnReport     = document.getElementById('btn-report');
 
-  if (text) document.getElementById("caption").textContent = text;
-}
+// ── Boot ──────────────────────────────────────────────────────────────────────
+(async function boot() {
+  // Check if we're on a Meet tab
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const onMeet = tab?.url?.includes('meet.google.com/');
 
-// ── Emotion panel ─────────────────────────────────────────────────────────────
-function updateEmotion(data) {
-  if (data.skipped) return; // rate-limited frame, ignore
-  const emotion = data.emotion;
-  if (!emotion || emotion.error) return;
+  if (!onMeet) {
+    elNotOnMeet.style.display = 'block';
+    elToggleRow.style.display = 'none';
+    elList.innerHTML = '';
+    return;
+  }
 
-  document.getElementById("emotion-label").textContent =
-    `${emojiFor(emotion.dominant_emotion)} ${emotion.dominant_emotion}`;
+  // On Meet — show toggle
+  elNotOnMeet.style.display = 'none';
+  elToggleRow.style.display = 'flex';
 
-  const container = document.getElementById("emotion-bars");
-  container.innerHTML = "";
+  // Restore state from storage
+  const data = await chrome.storage.local.get(['capturing', 'conference_id']);
+  conferenceId = data.conference_id || null;
+  const capturing = !!data.capturing;
 
-  const scores = emotion.emotions || {};
-  // Sort by score descending
-  const sorted = Object.entries(scores).sort(([, a], [, b]) => b - a);
-  const max = sorted[0]?.[1] || 1;
+  elToggle.checked = capturing;
+  updateToggleUI(capturing);
 
-  sorted.forEach(([name, score]) => {
-    const width = Math.round((score / max) * 100);
-    const color = EMOTION_COLORS[name.toLowerCase()] || "#9ca3af";
-    const row = document.createElement("div");
-    row.className = "ebar-row";
-    row.innerHTML = `
-      <span class="name">${name}</span>
-      <div class="ebar-bg">
-        <div class="ebar-fill" style="width:${width}%; background:${color};"></div>
-      </div>
-      <span class="val">${score.toFixed(1)}%</span>
-    `;
-    container.appendChild(row);
+  if (conferenceId) {
+    elMeetingId.textContent = conferenceId.split('/').pop().slice(0, 12);
+  }
+
+  if (capturing && conferenceId) {
+    startPolling();
+  }
+
+  // Toggle handler
+  elToggle.addEventListener('change', async () => {
+    const on = elToggle.checked;
+    await chrome.storage.local.set({ capturing: on });
+    updateToggleUI(on);
+
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (activeTab?.id) {
+      chrome.tabs.sendMessage(activeTab.id, { type: on ? 'START_CAPTURE' : 'STOP_CAPTURE' });
+    }
+
+    if (on) {
+      // Wait a moment for content.js to call /session/start and store conference_id
+      setTimeout(async () => {
+        const d = await chrome.storage.local.get('conference_id');
+        conferenceId = d.conference_id || null;
+        if (conferenceId) {
+          elMeetingId.textContent = conferenceId.split('/').pop().slice(0, 12);
+        }
+        startPolling();
+      }, 1500);
+    } else {
+      stopPolling();
+      elBtnReport.disabled = false; // Enable report after stopping
+    }
   });
+
+  // Report button
+  elBtnReport.addEventListener('click', () => {
+    if (conferenceId) {
+      chrome.tabs.create({ url: `${DASHBOARD}/report/${encodeURIComponent(conferenceId)}` });
+    }
+  });
+})();
+
+
+// ── Toggle UI ─────────────────────────────────────────────────────────────────
+function updateToggleUI(on) {
+  if (on) {
+    elToggleLabel.innerHTML = '<span class="pulse-dot"></span> Capturing...';
+    elToggleLabel.style.color = '#ef4444';
+  } else {
+    elToggleLabel.innerHTML = '<span class="off-text">Click to start capturing</span>';
+    elToggleLabel.style.color = '';
+  }
 }
 
-function emojiFor(emotion) {
-  const map = { happy:"😄", sad:"😢", angry:"😠", fear:"😨", surprise:"😮", neutral:"😐", disgust:"🤢" };
-  return map[emotion?.toLowerCase()] || "🎭";
+// ── Polling ───────────────────────────────────────────────────────────────────
+function startPolling() {
+  if (pollTimer) return;
+  poll(); // immediate first call
+  pollTimer = setInterval(poll, POLL_MS);
 }
 
-// ── Boot: load cached state ───────────────────────────────────────────────────
-chrome.storage.local.get(["latestSentiment", "latestEmotion"], ({ latestSentiment, latestEmotion }) => {
-  if (latestSentiment) updateSentiment(latestSentiment);
-  if (latestEmotion)   updateEmotion(latestEmotion);
-});
+function stopPolling() {
+  clearInterval(pollTimer);
+  pollTimer = null;
+}
 
-// ── Live updates from background.js ──────────────────────────────────────────
-chrome.runtime.onMessage.addListener((message) => {
-  if (message.type !== "LIVE_UPDATE") return;
-  const { payload } = message;
-  if (payload.type === "result_caption") updateSentiment(payload);
-  if (payload.type === "result_emotion")  updateEmotion(payload);
-});
+async function poll() {
+  if (!conferenceId) return;
+  try {
+    const res = await fetch(`${API}/live/${encodeURIComponent(conferenceId)}`, {
+      signal: AbortSignal.timeout(2500),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    render(data.participants || []);
+  } catch (_) {}
+}
 
-// ── Capture controls ──────────────────────────────────────────────────────────
-document.getElementById("btn-start").addEventListener("click", () => {
-  chrome.runtime.sendMessage({ type: "START_CAPTURE" });
-});
-document.getElementById("btn-stop").addEventListener("click", () => {
-  chrome.runtime.sendMessage({ type: "STOP_CAPTURE" });
-});
+// ── Render ────────────────────────────────────────────────────────────────────
+function render(participants) {
+  if (!participants.length) {
+    elList.innerHTML = '<div class="empty">Waiting for participants…</div>';
+    return;
+  }
+  elBtnReport.disabled = false;
+
+  elList.innerHTML = participants.map(p => {
+    const emotion = (p.dominant_emotion || 'neutral').toLowerCase();
+    const emoji = EMOJI[emotion] || '😐';
+    const color = COLORS[emotion] || '#94a3b8';
+    const conf  = Math.round((p.confidence || 0) * 100);
+    const name  = p.participant_name || 'Unknown';
+    return `
+      <div class="card">
+        <span class="emoji">${emoji}</span>
+        <div class="info">
+          <div class="name" title="${name}">${name}</div>
+          <div class="emotion-row">
+            <span class="emotion-label" style="color:${color}">${emotion}</span>
+            <span class="conf">${conf}%</span>
+          </div>
+          <div class="bar-bg"><div class="bar-fill" style="width:${conf}%;background:${color}"></div></div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+window.addEventListener('unload', stopPolling);
