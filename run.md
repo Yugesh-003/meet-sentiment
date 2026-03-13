@@ -2,6 +2,7 @@
    - Open a new terminal
    - cd backend
    - venv\Scripts\activate && uvicorn main:app --reload --port 8000
+   - venv\Scripts\activate ; uvicorn main:app --reload --port 8000
    - Backend will start at http://localhost:8000
 
 2. Frontend
